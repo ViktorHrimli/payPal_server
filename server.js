@@ -1,16 +1,24 @@
 import express from "express";
 import fetch from "node-fetch";
+import cors from "cors";
 import "dotenv/config";
 import path from "path";
-import cors from "cors";
+
+import * as PayPal from "./google.api.js";
 
 const { PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PORT = 8888 } = process.env;
 const base = "https://api-m.sandbox.paypal.com";
 const app = express();
 
+app.use(express.static("client/dist"));
+const corsOptions = {
+  origin: "http://localhost:3000",
+  credentials: true, //access-control-allow-credentials:true
+  optionSuccessStatus: 200,
+};
+app.use(cors(corsOptions));
+
 app.use(express.json());
-app.use(cors());
-app.use(express.static("client"));
 
 const generateAccessToken = async () => {
   try {
@@ -35,7 +43,27 @@ const generateAccessToken = async () => {
   }
 };
 
+const generateClientToken = async () => {
+  const accessToken = await generateAccessToken();
+  const url = `${base}/v1/identity/generate-token`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Accept-Language": "en_US",
+      "Content-Type": "application/json",
+    },
+  });
+
+  return handleResponse(response);
+};
+
 const createOrder = async (cart) => {
+  console.log(
+    "shopping cart information passed from the frontend createOrder() callback:",
+    cart
+  );
+
   const accessToken = await generateAccessToken();
   const url = `${base}/v2/checkout/orders`;
   const payload = {
@@ -44,7 +72,7 @@ const createOrder = async (cart) => {
       {
         amount: {
           currency_code: "EUR",
-          value: cart[0].amount,
+          value: "100.00",
         },
       },
     ],
@@ -90,8 +118,24 @@ async function handleResponse(response) {
   }
 }
 
+app.get("/", (req, res) => {
+  res.sendFile(path.resolve("./client/dist/index.html"));
+});
+
+// return client token for hosted-fields component
+app.post("/api/token", async (req, res) => {
+  try {
+    const { jsonResponse, httpStatusCode } = await generateClientToken();
+    res.status(httpStatusCode).json(jsonResponse);
+  } catch (error) {
+    console.error("Failed to generate client token:", error);
+    res.status(500).send({ error: "Failed to generate client token." });
+  }
+});
+
 app.post("/api/orders", async (req, res) => {
   try {
+    // use the cart information passed from the front-end to calculate the order amount detals
     const { cart } = req.body;
     const { jsonResponse, httpStatusCode } = await createOrder(cart);
     res.status(httpStatusCode).json(jsonResponse);
@@ -110,11 +154,6 @@ app.post("/api/orders/:orderID/capture", async (req, res) => {
     console.error("Failed to create order:", error);
     res.status(500).json({ error: "Failed to capture order." });
   }
-});
-
-// serve index.html
-app.get("/", (req, res) => {
-  res.sendFile(path.resolve("./client/checkout.html"));
 });
 
 app.listen(PORT, () => {
